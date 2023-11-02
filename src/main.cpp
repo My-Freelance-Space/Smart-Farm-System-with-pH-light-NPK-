@@ -1,5 +1,6 @@
 #include <SoftwareSerial.h>
 #include <Wire.h>
+#include <LiquidCrystal_I2C.h>
 
 // RS485 module
 #define RE 32
@@ -31,6 +32,11 @@ float m = -6.80;
 // Relay Pin
 const int relay_NPK = 16;
 const int relay_pH = 17;
+
+
+// LCD
+LiquidCrystal_I2C lcd(0x27, 16, 2);  // Set the LCD I2C address to 0x27 for a 16x2 display
+bool showNPK = true;
 
 
 byte readSensor_NPK(const byte request[], size_t requestSize, const char* nutrient) {
@@ -76,7 +82,7 @@ void readSensor_pH(){
     delay(10);
   }
   phAvg = phTot / 10;
-  float phVoltage = phAvg * (5.0 / 4095.0);
+  float phVoltage = phAvg * (3.3 / 4095);
   ph_val = phVoltage * m + C;
   Serial.print("phVoltage = ");
   Serial.print(phVoltage);
@@ -104,6 +110,66 @@ void relay(){
 }
 
 
+void taskDisplay(void* pvParameters){
+
+    while(true){
+        lcd.clear(); // Clear the LCD before displaying new values
+
+        if (showNPK) {
+            // Display NPK values
+            lcd.setCursor(0, 0);
+            lcd.print("N:");
+            lcd.print(n_val);
+            lcd.print("    P:");
+            lcd.print(p_val);
+            lcd.setCursor(0, 1);
+            lcd.print("K:");
+            lcd.print(k_val);
+        } else {
+            // Display pH and Photo values
+            lcd.setCursor(0, 0);
+            lcd.print("pH: ");
+            lcd.print(ph_val, 2);  // Display with 2 decimal points
+            lcd.setCursor(0, 1);
+            lcd.print("Photo: ");
+            lcd.print(photo_val);
+        }
+        
+        // Toggle the display flag for next call
+        showNPK = !showNPK;
+        vTaskDelay(pdMS_TO_TICKS(5000));
+
+    }
+}
+
+
+
+void taskMain(void* pvParameters){
+
+    while(true){
+      // Soil Sensor
+      n_val = readSensor_NPK(nitro, sizeof(nitro), "Nitrogen");
+      delay(500);
+      p_val = readSensor_NPK(phos, sizeof(phos), "Phosphorous");
+      delay(500);
+      k_val = readSensor_NPK(pota, sizeof(pota), "Potassium");
+      delay(500);
+
+      // Photo Sensor
+      readSensor_photo();
+
+      // pH Sensor
+      readSensor_pH();
+
+      //Relay checking
+      relay();
+      
+      vTaskDelay(pdMS_TO_TICKS(1000));
+
+    }
+}
+
+
 void setup() {
   Serial.begin(115200);
   mod.begin(4800);
@@ -112,27 +178,27 @@ void setup() {
   pinMode(ledPin2, OUTPUT);
   pinMode(relay_NPK,OUTPUT);
   pinMode(relay_pH,OUTPUT);
+  
+
+  // Setup LCD
+  lcd.init();
+  lcd.backlight();
+  lcd.clear();
+
+
+
+    //using concurrent program
+  xTaskCreatePinnedToCore(taskDisplay, "taskDisplay", 1024*8, NULL, 1, NULL,0);
+  xTaskCreatePinnedToCore(taskMain, "taskMain", 1024*8, NULL, 1, NULL,1);
+
   delay(500);
+
+
+
+  
 }
 
 void loop() {
-  // Soil Sensor
-  n_val = readSensor_NPK(nitro, sizeof(nitro), "Nitrogen");
-  delay(500);
-  p_val = readSensor_NPK(phos, sizeof(phos), "Phosphorous");
-  delay(500);
-  k_val = readSensor_NPK(pota, sizeof(pota), "Potassium");
-  delay(500);
-
-  // Photo Sensor
-  readSensor_photo();
-
-  // pH Sensor
-  readSensor_pH();
-
-
-  //Relay checking
-  relay();
 
 
   delay(1000);
