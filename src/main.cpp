@@ -3,11 +3,13 @@
 #include <LiquidCrystal_I2C.h>
 #include <BlynkSimpleEsp32.h>
 #include <WiFi.h>
-
+#include <vector>
+#include <algorithm>
+#include <numeric> 
 
 // WiFi and Blynk credentials
-const char* ssid  = "ART3MISS";
-const char* pass = "Artelec3603";
+const char* ssid  = "Tuna";
+const char* pass = "0956344472";
 const char* auth = "FkfQVS4--9AHFmY7CBuOkfenV641PSbq";
 
 
@@ -88,10 +90,11 @@ void update_blynk(void* pvParameters){
 byte readSensor_NPK(const byte request[], size_t requestSize, const char* nutrient) {
   digitalWrite(DE, HIGH);
   digitalWrite(RE, HIGH);
-  delay(100);
+  delay(10);
   if (mod.write(request, requestSize) == requestSize) {
     digitalWrite(DE, LOW);
     digitalWrite(RE, LOW);
+    delay(10); // Give some time for the response
     for (byte i = 0; i < 7; i++) {
       NPK_response[i] = mod.read();
       Serial.print(NPK_response[i], HEX);
@@ -105,6 +108,88 @@ byte readSensor_NPK(const byte request[], size_t requestSize, const char* nutrie
   }
   return 0;
 }
+
+#define NUM_READINGS 10
+
+// Overload calculateMedian to handle both int and float vectors
+float calculateMedian(std::vector<int>& data) {
+  size_t size = data.size();
+  if (size == 0) {
+    return 0;  // Undefined, really.
+  } else {
+    sort(data.begin(), data.end());
+    if (size % 2 == 0) {
+      return (data[size / 2 - 1] + data[size / 2]) / 2;
+    } else {
+      return data[size / 2];
+    }
+  }
+}
+
+float calculateMedian(std::vector<float>& data) {
+  size_t size = data.size();
+  if (size == 0) {
+    return 0;  // Undefined, really.
+  } else {
+    sort(data.begin(), data.end());
+    if (size % 2 == 0) {
+      return (data[size / 2 - 1] + data[size / 2]) / 2;
+    } else {
+      return data[size / 2];
+    }
+  }
+}
+
+float calculateMAD(std::vector<int>& data, float median) {
+  std::vector<float> absDeviations;
+  for (int value : data) {
+    absDeviations.push_back(abs(value - median));
+  }
+  return calculateMedian(absDeviations);
+}
+
+void readSensor_NPK_avg() {
+  std::vector<int> n_readings, p_readings, k_readings;
+
+  for (int i = 0; i < NUM_READINGS; i++) {
+    n_readings.push_back(readSensor_NPK(nitro, sizeof(nitro), "Nitrogen"));
+    delay(50);
+    p_readings.push_back(readSensor_NPK(phos, sizeof(phos), "Phosphorous"));
+    delay(50);
+    k_readings.push_back(readSensor_NPK(pota, sizeof(pota), "Potassium"));
+    delay(50);
+  }
+
+  float n_median = calculateMedian(n_readings);
+  float p_median = calculateMedian(p_readings);
+  float k_median = calculateMedian(k_readings);
+
+  float n_mad = calculateMAD(n_readings, n_median);
+  float p_mad = calculateMAD(p_readings, p_median);
+  float k_mad = calculateMAD(k_readings, k_median);
+
+  std::vector<int> n_filtered, p_filtered, k_filtered;
+  for (int value : n_readings) {
+    if (abs(value - n_median) <= 2 * n_mad) {
+      n_filtered.push_back(value);
+    }
+  }
+  for (int value : p_readings) {
+    if (abs(value - p_median) <= 2 * p_mad) {
+      p_filtered.push_back(value);
+    }
+  }
+  for (int value : k_readings) {
+    if (abs(value - k_median) <= 2 * k_mad) {
+      k_filtered.push_back(value);
+    }
+  }
+
+  n_val = std::accumulate(n_filtered.begin(), n_filtered.end(), 0) / n_filtered.size();
+  p_val = std::accumulate(p_filtered.begin(), p_filtered.end(), 0) / p_filtered.size();
+  k_val = std::accumulate(k_filtered.begin(), k_filtered.end(), 0) / k_filtered.size();
+}
+
 
 void readSensor_photo(){
 
@@ -146,25 +231,23 @@ void relay(){
     //relay NPK
 
   if (relay_NPK_blynk){
-    digitalWrite(relay_NPK, LOW);
+    if (n_val < 50 || p_val < 50 || k_val < 50) {
+      // digitalWrite(relay_NPK, HIGH);
+      digitalWrite(relay_NPK, LOW);
+    }
   }
   else{
-    if (n_val < 50 || p_val < 50 || k_val < 50) {
       digitalWrite(relay_NPK, HIGH);
-      // digitalWrite(relay_NPK, LOW);
-    } else {
-      digitalWrite(relay_NPK, HIGH);
-    }
 
   }
 
     //relay pH
   if (relay_pH_blynk){
-    digitalWrite(relay_pH, LOW);
+    digitalWrite(relay_pH, (ph_val >= 5 && ph_val <= 7));
   }
   else{
     digitalWrite(relay_pH, HIGH);
-    // digitalWrite(relay_pH, (ph_val >= 5 && ph_val <= 7));
+    
   }
 
 
@@ -210,13 +293,8 @@ void taskDisplay(void* pvParameters){
 void taskMain(void* pvParameters){
 
     while(true){
-      // Soil Sensor
-      n_val = readSensor_NPK(nitro, sizeof(nitro), "Nitrogen");
-      delay(500);
-      p_val = readSensor_NPK(phos, sizeof(phos), "Phosphorous");
-      delay(500);
-      k_val = readSensor_NPK(pota, sizeof(pota), "Potassium");
-      delay(500);
+    // Read and average sensor values
+      readSensor_NPK_avg();
 
       // Photo Sensor
       readSensor_photo();
