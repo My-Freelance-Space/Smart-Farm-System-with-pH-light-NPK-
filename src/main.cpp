@@ -1,6 +1,15 @@
 #include <SoftwareSerial.h>
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
+#include <BlynkSimpleEsp32.h>
+#include <WiFi.h>
+
+
+// WiFi and Blynk credentials
+const char* ssid  = "ART3MISS";
+const char* pass = "Artelec3603";
+const char* auth = "FkfQVS4--9AHFmY7CBuOkfenV641PSbq";
+
 
 // RS485 module
 #define RE 32
@@ -32,17 +41,54 @@ float m = -6.80;
 // Relay Pin
 const int relay_NPK = 16;
 const int relay_pH = 17;
-
+bool relay_NPK_blynk = false;
+bool relay_pH_blynk = false;
 
 // LCD
 LiquidCrystal_I2C lcd(0x27, 16, 2);  // Set the LCD I2C address to 0x27 for a 16x2 display
 bool showNPK = true;
 
 
+//Blynk Listening
+
+BLYNK_WRITE(V5) {
+    int blynkMaualRelayButton = param.asInt();  
+    if (blynkMaualRelayButton == 0 ){
+        relay_NPK_blynk = false;
+    }
+    else{
+        relay_NPK_blynk = true;
+    }
+}
+
+BLYNK_WRITE(V6) {
+    int blynkMaualRelayButton = param.asInt();  
+    if (blynkMaualRelayButton == 0 ){
+        relay_pH_blynk = false;
+    }
+    else{
+        relay_pH_blynk = true;
+    }
+}
+
+void update_blynk(void* pvParameters){
+
+    while(true){
+
+    Blynk.run();
+    String npk_val_string = String(n_val) + "_" + String(p_val) + "_" + String(k_val) ;
+    Blynk.virtualWrite(V0,npk_val_string);
+    Blynk.virtualWrite(V1,photo_val);
+    Blynk.virtualWrite(V2, ph_val);
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+
+
 byte readSensor_NPK(const byte request[], size_t requestSize, const char* nutrient) {
   digitalWrite(DE, HIGH);
   digitalWrite(RE, HIGH);
-  delay(10);
+  delay(100);
   if (mod.write(request, requestSize) == requestSize) {
     digitalWrite(DE, LOW);
     digitalWrite(RE, LOW);
@@ -98,14 +144,29 @@ void readSensor_pH(){
 void relay(){
 
     //relay NPK
-  if (n_val < 50 || p_val < 50 || k_val < 50) {
+
+  if (relay_NPK_blynk){
     digitalWrite(relay_NPK, LOW);
-  } else {
-    digitalWrite(relay_NPK, HIGH);
+  }
+  else{
+    if (n_val < 50 || p_val < 50 || k_val < 50) {
+      digitalWrite(relay_NPK, HIGH);
+      // digitalWrite(relay_NPK, LOW);
+    } else {
+      digitalWrite(relay_NPK, HIGH);
+    }
+
   }
 
     //relay pH
-  digitalWrite(relay_pH, (ph_val >= 5 && ph_val <= 7));
+  if (relay_pH_blynk){
+    digitalWrite(relay_pH, LOW);
+  }
+  else{
+    digitalWrite(relay_pH, HIGH);
+    // digitalWrite(relay_pH, (ph_val >= 5 && ph_val <= 7));
+  }
+
 
 }
 
@@ -113,6 +174,8 @@ void relay(){
 void taskDisplay(void* pvParameters){
 
     while(true){
+
+
         lcd.clear(); // Clear the LCD before displaying new values
 
         if (showNPK) {
@@ -178,6 +241,8 @@ void setup() {
   pinMode(ledPin2, OUTPUT);
   pinMode(relay_NPK,OUTPUT);
   pinMode(relay_pH,OUTPUT);
+  digitalWrite(relay_NPK, HIGH);
+  digitalWrite(relay_pH, HIGH);
   
 
   // Setup LCD
@@ -185,12 +250,20 @@ void setup() {
   lcd.backlight();
   lcd.clear();
 
+  // Setup Wifi
+  WiFi.begin(ssid, pass);
+  while (WiFi.status() != WL_CONNECTED) {
+      delay(1000);
+      Serial.println("Connecting to WiFi...");
+  }
+  
+  Blynk.begin(auth, ssid, pass);
 
 
     //using concurrent program
   xTaskCreatePinnedToCore(taskDisplay, "taskDisplay", 1024*8, NULL, 1, NULL,0);
   xTaskCreatePinnedToCore(taskMain, "taskMain", 1024*8, NULL, 1, NULL,1);
-
+  xTaskCreatePinnedToCore(update_blynk, "update Blynk", 1024*8, NULL, 1, NULL,0);
   delay(500);
 
 
@@ -199,7 +272,6 @@ void setup() {
 }
 
 void loop() {
-
 
   delay(1000);
 }
